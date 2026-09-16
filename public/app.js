@@ -123,6 +123,7 @@ function handle(m) {
 
     case 'state':
       if (S && (S.round !== m.round || S.phase !== m.phase)) handEls.clear();
+      countGame(m);            // S 를 덮기 전에 — 직전 phase 가 있어야 전이를 잡는다
       S = m;
       me = m.you != null ? m.you : me;
       if (m.now) skew = m.now - Date.now();   // 서버 시계에 맞춰 남은 시간을 센다
@@ -295,6 +296,21 @@ document.addEventListener('keydown', e => {
 });
 
 /* ─────────────────────────── 그리기 ─────────────────────────── */
+
+/* 판 수 세기 — 방장 화면에서만 보낸다. 사람마다 보내면 한 판이 인원수만큼 세어진다. */
+let gameAt = 0;
+function countGame(m) {
+  const my = m.you != null ? m.you : me;
+  if (!window.norara || !m.players || m.hostId !== my) return;
+  const humans = m.players.filter(p => !p.bot).length;
+  if (m.phase === 'playing' && (!S || S.phase !== 'playing')) {
+    gameAt = Date.now();
+    norara.ev('start', { n: humans });
+  } else if (m.phase === 'over' && (!S || S.phase !== 'over') && gameAt) {
+    norara.ev('end', { n: humans, sec: Math.round((Date.now() - gameAt) / 1000) });
+    gameAt = 0;
+  }
+}
 
 function render() {
   if (!S) return;
