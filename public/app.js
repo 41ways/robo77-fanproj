@@ -628,12 +628,12 @@ requestAnimationFrame(tick);
 
 /* ─────────────────────────── 테마 ─────────────────────────── */
 
-/** 라이트가 기본. 고른 값은 다음에 와도 그대로 남는다. */
-function setTheme(t) {
+/** 고른 적 없으면 기기 설정을 따른다. 직접 고른 값만 다음에 와도 그대로 남는다. */
+function setTheme(t, keep = true) {
   document.documentElement.dataset.theme = t;
-  try { localStorage.setItem('theme', t); } catch (_) {}
+  if (keep) { try { localStorage.setItem('theme', t); } catch (_) {} }
   const light = t !== 'dark';
-  $('#tTheme').setAttribute('aria-checked', String(light));
+  $('#tTheme').setAttribute('aria-checked', String(!light));   // 손잡이를 지금 테마 쪽(☀ 왼쪽 · ☾ 오른쪽)에 붙인다
   $$('[data-theme-toggle]').forEach(b => { b.textContent = light ? '☾' : '☀'; });
 }
 const curTheme = () => (document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
@@ -734,7 +734,13 @@ document.addEventListener('keydown', e => {
 
 /* ─────────────────────────── 시작 ─────────────────────────── */
 
-setTheme(localStorage.getItem('theme') || 'light');
+// 고른 적 없으면 기기 설정을 따른다
+(() => {
+  let t = null;
+  try { t = localStorage.getItem('theme'); } catch (_) {}
+  if (t === 'dark' || t === 'light') { setTheme(t); return; }
+  setTheme((window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light', false);
+})();
 $('#gName').value = localStorage.getItem('name') || '';
 
 const invited = new URLSearchParams(location.search).get('r');

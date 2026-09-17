@@ -6,7 +6,11 @@
 <title>로보77</title>
 <script>
   // 첫 페인트 전에 테마를 정해서 화면이 번쩍이지 않게 한다
-  try { document.documentElement.dataset.theme = localStorage.getItem('theme') || 'light'; } catch (e) {}
+  try {
+    var t = localStorage.getItem('theme');
+    if (t !== 'dark' && t !== 'light') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.dataset.theme = t;
+  } catch (e) { document.documentElement.dataset.theme = 'light'; }
 </script>
 <link rel="stylesheet" href="/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🤖</text></svg>">
@@ -17,7 +21,7 @@
 <section id="title" class="screen on">
   <div class="theme-switch">
     <span class="ts-ico">☀</span>
-    <button id="tTheme" class="toggle sm" role="switch" aria-checked="true" aria-label="라이트 테마"><span></span></button>
+    <button id="tTheme" class="toggle sm" role="switch" aria-checked="false" aria-label="다크 테마"><span></span></button>
     <span class="ts-ico">☾</span>
   </div>
 
