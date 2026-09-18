@@ -41,6 +41,7 @@ function wake(e) {
   resting = false;
   $('#toast').classList.remove('on');
   if (store.getItem('code') && store.getItem('token')) { wokeUp = true; resume(); }
+  else if (watching) watchRooms(true);      // 방 고르기 화면에서 쉬었다 — 목록을 다시 받는다
 }
 ['pointerdown', 'keydown'].forEach(t => addEventListener(t, wake, true));
 document.addEventListener('visibilitychange', wake);
@@ -87,7 +88,10 @@ function connect(onOpen) {
       clearTimeout(toastT);                    // 누를 때까지 떠 있게
       return;
     }
-    if (store.getItem('code') && store.getItem('token')) {
+    if (watching && !store.getItem('code')) {
+      // 방 고르기 화면에서 끊겼다 — 조용히 다시 붙어 목록을 이어 받는다
+      setTimeout(() => { if (watching && (!ws || ws.readyState > 1)) watchRooms(true); }, 3000);
+    } else if (store.getItem('code') && store.getItem('token')) {
       toast('연결이 끊겼어요. 다시 붙는 중…');
       setTimeout(() => connect(() => send({
         t: 'resume', code: store.getItem('code'), token: store.getItem('token'),
@@ -119,6 +123,10 @@ function handle(m) {
 
     case 'chat':
       addChat(m.name, m.text, m.from === me);
+      break;
+
+    case 'rooms':
+      if (watching) renderRooms(m.list);
       break;
 
     case 'state':
@@ -154,6 +162,7 @@ function handle(m) {
 
 function show(id) {
   $$('.screen').forEach(s => s.classList.toggle('on', s.id === id));
+  if ((id === 'setup') !== watching) watchRooms(id === 'setup');
   // 방 밖에서는 채팅이 갈 곳이 없다 — 버튼과 창을 접고 전 방의 말도 비운다
   if (id === 'title' || id === 'setup') { chatRoom = null; chatReset(); $('#chatBtn').hidden = true; }
 }
@@ -324,7 +333,7 @@ function render() {
 
 function renderLobby() {
   $('#lCode').textContent = S.code;
-  $('#lCount').textContent = `${S.players.length} / ${S.max}명`;
+  $('#lCount').textContent = `${S.players.length} / ${S.max}명` + (S.cfg.priv ? ' · 비공개' : '');
   const isHost = S.hostId === me;
 
   const ul = $('#lPlayers');
@@ -351,6 +360,7 @@ function renderLobby() {
   $('#lWait').classList.toggle('hidden', isHost);
 
   $('#tSum').setAttribute('aria-checked', String(S.cfg.showSum));
+  $('#tPriv').setAttribute('aria-checked', String(!!S.cfg.priv));
   $('#sumDesc').textContent = S.cfg.showSum
     ? '합이 화면에 뜬다. 처음이라면 켜 두는 쪽.'
     : '합이 안 보인다. 나온 카드를 보고 직접 세야 한다.';
@@ -663,7 +673,7 @@ function enter(msg) {
   localStorage.setItem('name', myName());
   connect(() => send(msg));
 }
-$('#bCreate').onclick = () => enter({ t: 'create', name: myName() });
+$('#bCreate').onclick = () => enter({ t: 'create', name: myName(), priv: $('#gPriv').checked });
 
 function doJoin() {
   const code = ($('#gCode').value || '').trim().toUpperCase();
@@ -671,6 +681,49 @@ function doJoin() {
   enter({ t: 'join', code, name: myName() });
 }
 $('#bJoin').onclick = doJoin;
+
+/* ─────────────────────────── 열린 방 ───────────────────────────
+   방 고르기 화면을 보는 동안만 서버에 목록을 받는다. 방에 들어가면 서버가 알아서 끊어 준다.
+   탭을 뒤로 보내면 소켓을 놓는다 — 켜 두기만 한 첫 화면이 서버(무료 한도)를 붙잡지 않게. */
+let watching = false;
+function watchRooms(on) {
+  watching = on;
+  if (on) connect(() => { if (watching && !store.getItem('code')) send({ t: 'rooms' }); });
+  else send({ t: 'unwatch' });
+}
+document.addEventListener('visibilitychange', () => {
+  if (!watching || resting || store.getItem('code') || Date.now() - entering < 4000) return;
+  if (document.hidden) {
+    if (!ws) return;
+    const s = ws; ws = null;
+    s.onopen = s.onmessage = s.onclose = null;
+    clearInterval(pingT);
+    try { s.close(); } catch (_) {}
+  } else watchRooms(true);
+});
+
+const ROOM_STATE = { wait: '기다리는 중', full: '가득 참', playing: '게임 중' };
+function renderRooms(list) {
+  const open = list.filter(r => r.state === 'wait').length;
+  $('#roomCount').textContent = list.length ? `${open}곳` : '';
+  $('#roomEmpty').hidden = list.length > 0;
+  $('#roomList').innerHTML = list.map(r => {
+    const off = r.state !== 'wait';
+    return `<li><button class="room-row${off ? ' off' : ''}" data-code="${esc(r.code)}"${off ? ' disabled' : ''}>
+      <span class="rr-code">${esc(r.code)}</span>
+      <span class="rr-host">${esc(r.host || '이름 없음')}의 방</span>
+      <span class="rr-n">${r.n}/${r.max}</span>
+      <span class="rr-st ${esc(r.state)}">${ROOM_STATE[r.state] || ''}</span>
+    </button></li>`;
+  }).join('');
+}
+// 줄을 누르면 코드를 넣고 참가를 누른 것과 똑같이 — 이름도 기존 참가 흐름을 그대로 탄다
+$('#roomList').addEventListener('click', e => {
+  const b = e.target.closest('.room-row');
+  if (!b || b.disabled) return;
+  $('#gCode').value = b.dataset.code;
+  doJoin();
+});
 $('#gCode').onkeydown = e => { if (e.key === 'Enter') doJoin(); };
 $('#gName').onkeydown = e => { if (e.key === 'Enter') $('#bCreate').click(); };
 
@@ -681,6 +734,7 @@ $('#bCopy').onclick = async () => {
 };
 
 $('#tSum').onclick = () => send({ t: 'cfg', showSum: S.cfg.showSum !== true });
+$('#tPriv').onclick = () => send({ t: 'cfg', priv: S.cfg.priv !== true });
 $$('#segTime button').forEach(b => {
   b.onclick = () => send({ t: 'cfg', turnLimit: Number(b.dataset.ms) });
 });

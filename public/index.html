@@ -60,11 +60,22 @@
 
     <div class="gate-buttons">
       <button id="bCreate" class="btn big">새 방 만들기</button>
+      <label class="priv-pick">
+        <input type="checkbox" id="gPriv">
+        <span>비공개 방으로 <small>열린 방 목록에 안 뜨고, 코드로만 들어와요</small></span>
+      </label>
       <div class="or"><span>또는</span></div>
       <div class="join-row">
         <input id="gCode" maxlength="4" placeholder="코드" autocomplete="off" spellcheck="false">
         <button id="bJoin" class="btn ghost">참가</button>
       </div>
+    </div>
+
+    <!-- 열린 방 — 코드를 몰라도 사람을 기다리는 방에 들어갈 수 있게. 이 화면을 보는 동안만 받는다. -->
+    <div class="open-rooms">
+      <p class="or-head">열린 방 <span id="roomCount" class="muted"></span></p>
+      <ul id="roomList" class="room-list"></ul>
+      <p id="roomEmpty" class="room-empty">지금 열린 방이 없어요 — 방을 만들어 보세요</p>
     </div>
 
     <button class="btn link" data-help>규칙이 궁금하다면</button>
@@ -97,6 +108,14 @@
           <p class="opt-desc" id="sumDesc">합이 화면에 뜬다. 처음이라면 켜 두는 쪽.</p>
         </div>
         <button id="tSum" class="toggle" role="switch" aria-checked="true"><span></span></button>
+      </div>
+
+      <div class="opt">
+        <div class="opt-text">
+          <p class="opt-title">비공개 방</p>
+          <p class="opt-desc">열린 방 목록에 안 뜬다. 코드나 초대 링크로만 들어온다.</p>
+        </div>
+        <button id="tPriv" class="toggle" role="switch" aria-checked="false"><span></span></button>
       </div>
 
       <div class="opt">
