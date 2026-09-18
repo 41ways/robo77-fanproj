@@ -301,6 +301,8 @@ document.addEventListener('keydown', e => {
 let gameAt = 0;
 function countGame(m) {
   const my = m.you != null ? m.you : me;
+  // 지금 판 중인지 — 참가자도 알린다(판 수는 방장만 세지만, "지금 누가 있나"는 사람마다 센다)
+  if (window.norara && norara.live) norara.live(m.phase === 'playing');
   if (!window.norara || !m.players || m.hostId !== my) return;
   const humans = m.players.filter(p => !p.bot).length;
   if (m.phase === 'playing' && (!S || S.phase !== 'playing')) {
