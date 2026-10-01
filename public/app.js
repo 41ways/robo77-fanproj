@@ -14,6 +14,10 @@ let me = null;            // 내 player id
 let S = null;             // 마지막으로 받은 state
 let lastSum = 0;
 let skew = 0;             // 서버 시계와의 차이
+let specId = null;        // 관전 중이면 내 관전자 번호(채팅에서 내 말을 가려낸다). 정식 참가자면 null
+let specCtx = null;       // 관전 중일 때 { code, name } — 소켓이 끊겨도 다시 관전자로 붙는 데 쓴다
+let specRejoin = false;   // 관전자로 다시 붙는 중 — 방이 사라졌다는 답이 오면 첫 화면으로 돌아간다
+const isSpec = () => !!S && S.role === 'spec';
 const store = window.sessionStorage;
 
 /* 계측 도구(qa/scene.js)가 상태를 들여다볼 수 있게 최소한만 내놓는다 */
@@ -41,6 +45,7 @@ function wake(e) {
   resting = false;
   $('#toast').classList.remove('on');
   if (store.getItem('code') && store.getItem('token')) { wokeUp = true; resume(); }
+  else if (specCtx) rejoinSpec();           // 관전하던 방에 관전자로 다시 붙는다
   else if (watching) watchRooms(true);      // 방 고르기 화면에서 쉬었다 — 목록을 다시 받는다
 }
 ['pointerdown', 'keydown'].forEach(t => addEventListener(t, wake, true));
@@ -96,10 +101,20 @@ function connect(onOpen) {
       setTimeout(() => connect(() => send({
         t: 'resume', code: store.getItem('code'), token: store.getItem('token'),
       })), 1200);
+    } else if (specCtx) {
+      // 관전 중에 끊겼다 — 자리(토큰)가 없으니 같은 방에 관전자로 다시 들어간다. 그 사이 대기실에 자리가 났으면 정식 참가가 된다.
+      toast('연결이 끊겼어요. 다시 붙는 중…');
+      setTimeout(() => { if (specCtx && (!ws || ws.readyState > 1)) rejoinSpec(); }, 1200);
     } else {
       show('title');
     }
   };
+}
+
+function rejoinSpec() {
+  if (!specCtx) return;
+  specRejoin = true;
+  connect(() => send({ t: 'join', code: specCtx.code, name: specCtx.name }));
 }
 
 const send = obj => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); };
@@ -115,14 +130,25 @@ function handle(m) {
     case 'welcome':
       wokeUp = false; entering = 0;
       if (m.code !== chatRoom) { chatRoom = m.code; chatReset(); }   // 다른 방이면 채팅을 비운다
+      specRejoin = false;
+      if (m.role === 'spec') {
+        // 관전자 — 자리도 토큰도 없다. 새로고침하면 초대 링크(?r=)로 다시 고르게 된다.
+        me = null; specId = m.specId;
+        specCtx = { code: m.code, name: myName() };
+        store.removeItem('code'); store.removeItem('token');
+        history.replaceState(null, '', `?r=${m.code}`);
+        break;
+      }
       me = m.you;
+      specId = null; specCtx = null;
       store.setItem('code', m.code);
       store.setItem('token', m.token);
       history.replaceState(null, '', `?r=${m.code}`);
+      if (m.seated) toast('자리가 났어요 — 이제 같이 해요');   // 관전하던 소켓이 그대로 정식 참가자가 됐다
       break;
 
     case 'chat':
-      addChat(m.name, m.text, m.from === me);
+      addChat(m.spec ? `${m.name} (관전)` : m.name, m.text, m.from === (me != null ? me : specId));
       break;
 
     case 'rooms':
@@ -133,7 +159,7 @@ function handle(m) {
       if (S && (S.round !== m.round || S.phase !== m.phase)) handEls.clear();
       countGame(m);            // S 를 덮기 전에 — 직전 phase 가 있어야 전이를 잡는다
       S = m;
-      me = m.you != null ? m.you : me;
+      me = m.role === 'spec' ? null : (m.you != null ? m.you : me);
       if (m.now) skew = m.now - Date.now();   // 서버 시계에 맞춰 남은 시간을 센다
       render();
       break;
@@ -146,12 +172,14 @@ function handle(m) {
       entering = 0;
       // 오래 쉬다 돌아왔는데 그사이 방이 정리된 경우 — 무엇 때문인지 알려 준다
       toast(m.fatal && wokeUp ? '오래 비워 둔 사이 방이 정리됐어요. 새로 만들어 주세요.' : m.msg);
-      if (m.fatal) { store.removeItem('code'); store.removeItem('token'); show('title'); }
+      if (m.fatal) { store.removeItem('code'); store.removeItem('token'); specCtx = null; specId = null; show('title'); }
+      else if (specRejoin) { specRejoin = false; specCtx = null; specId = null; show('title'); }   // 관전하던 방에 다시 못 들어갔다
       wokeUp = false;
       break;
 
     case 'left':
       store.removeItem('code'); store.removeItem('token');
+      specCtx = null; specId = null;
       history.replaceState(null, '', location.pathname);
       show('title');
       break;
@@ -282,7 +310,7 @@ window.addEventListener('focus', chatBack);
 
 /** 사람이 나 말고 또 있을 때만 채팅을 내놓는다 */
 function syncChatVisible() {
-  const humans = S ? S.players.filter(p => !p.bot).length : 0;
+  const humans = S ? S.players.filter(p => !p.bot).length + (S.specs ? S.specs.length : 0) : 0;
   const on = humans > 1;
   $('#chatBtn').hidden = !on;
   if (!on) { $('#chat').hidden = true; chatPeekOff(); }
@@ -309,6 +337,7 @@ document.addEventListener('keydown', e => {
 /* 판 수 세기 — 방장 화면에서만 보낸다. 사람마다 보내면 한 판이 인원수만큼 세어진다. */
 let gameAt = 0;
 function countGame(m) {
+  if (m.role === 'spec') { if (window.norara && norara.live) norara.live(false); return; }   // 구경만 하는 사람은 판 중으로 안 센다
   const my = m.you != null ? m.you : me;
   // 지금 판 중인지 — 참가자도 알린다(판 수는 방장만 세지만, "지금 누가 있나"는 사람마다 센다)
   if (window.norara && norara.live) norara.live(m.phase === 'playing');
@@ -325,6 +354,7 @@ function countGame(m) {
 
 function render() {
   if (!S) return;
+  document.body.classList.toggle('spec', isSpec());
   syncChatVisible();
   if (S.phase === 'lobby') { show('lobby'); renderLobby(); }
   else if (S.phase === 'playing') { show('game'); renderGame(); }
@@ -333,8 +363,11 @@ function render() {
 
 function renderLobby() {
   $('#lCode').textContent = S.code;
-  $('#lCount').textContent = `${S.players.length} / ${S.max}명` + (S.cfg.priv ? ' · 비공개' : '');
-  const isHost = S.hostId === me;
+  const spec = isSpec();
+  $('#lCount').textContent = `${S.players.length} / ${S.max}명` + (S.cfg.priv ? ' · 비공개' : '')
+    + (S.specs && S.specs.length ? ` · 관전 ${S.specs.length}명` : '');
+  $('#lSpecNote').hidden = !spec;
+  const isHost = !spec && S.hostId === me;
 
   const ul = $('#lPlayers');
   ul.innerHTML = '';
@@ -358,14 +391,17 @@ function renderLobby() {
 
   $('#lHostBox').classList.toggle('hidden', !isHost);
   $('#lWait').classList.toggle('hidden', isHost);
+  $('#lWait').textContent = spec ? '대기 중 — 방장이 시작하면 구경하고, 자리가 나면 같이 해요.' : '방장이 시작하기를 기다리는 중…';
 
   $('#tSum').setAttribute('aria-checked', String(S.cfg.showSum));
   $('#tPriv').setAttribute('aria-checked', String(!!S.cfg.priv));
+  $('#tSpec').setAttribute('aria-checked', String(S.cfg.spec !== false));
   $('#sumDesc').textContent = S.cfg.showSum
     ? '합이 화면에 뜬다. 처음이라면 켜 두는 쪽.'
     : '합이 안 보인다. 나온 카드를 보고 직접 세야 한다.';
   $$('#segTime button').forEach(b => b.classList.toggle('on', Number(b.dataset.ms) === S.cfg.turnLimit));
 
+  if (!isHost) return;
   $('#bStart').disabled = S.players.length < S.min;
   $('#bBot').disabled = S.players.length >= S.max;
 }
@@ -492,6 +528,11 @@ function flyToPile(el) {
 }
 
 function renderGame() {
+  const spec = isSpec();
+  $('#gSpecNote').hidden = !spec;
+  const sn = $('#gSpecN');
+  sn.hidden = !(S.specs && S.specs.length);
+  sn.textContent = `관전 ${S.specs ? S.specs.length : 0}명`;
   $('#gRound').textContent = `${S.round}라운드`;
   $('#gDir').textContent = S.dir === 1 ? '↻ 정방향' : '↺ 역방향';
 
@@ -551,9 +592,9 @@ function renderGame() {
   // 손패를 먼저 그린다.
   // 여기서 낸 카드가 날아가기 시작해야, 그 다음 renderTop 이 도착 시각을 알고 기다린다.
   // 순서가 반대면 더미에 카드가 먼저 뜨고 같은 장이 공중에도 떠 있어 둘로 보인다.
-  const mine = S.players.find(p => p.id === me);
-  const myTurn = S.turn === me && !S.reveal;
-  renderHand(myTurn);
+  const mine = spec ? null : S.players.find(p => p.id === me);
+  const myTurn = !spec && S.turn === me && !S.reveal;
+  if (!spec) renderHand(myTurn);          // 관전자는 손패 자리가 없다(CSS 가 걷는다)
 
   // 맨 위 카드 — 날아가는 카드가 도착한 뒤에 바꾼다
   renderTop();
@@ -587,9 +628,11 @@ function renderGame() {
 function renderOver() {
   $('#gNote').classList.add('hidden');
   const w = S.players.find(p => p.id === S.winner);
+  const spec = isSpec();
   $('#oWinner').textContent = w ? `${w.name} 승리` : '게임 끝';
-  $('#oSub').textContent = w && w.id === me ? '끝까지 살아남았어요.' : `${S.round}라운드까지 갔어요.`;
-  $('#bAgain').classList.toggle('hidden', S.hostId !== me);
+  $('#oSub').textContent = !spec && w && w.id === me ? '끝까지 살아남았어요.' : `${S.round}라운드까지 갔어요.`;
+  $('#bAgain').classList.toggle('hidden', spec || S.hostId !== me);
+  $('#oSpecNote').hidden = !spec;
 }
 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -617,7 +660,7 @@ function tick() {
   // 링은 판 한가운데에 있는데, 내 차례에는 눈이 아래 손패에 가 있다.
   // 시간이 끝나가는 걸 못 보고 하트를 잃지 않도록 손패 바로 위에도 남은 초를 둔다.
   const clock = $('#gClock');
-  const mine = S.turn === me && !S.reveal;
+  const mine = me != null && S.turn === me && !S.reveal;
   if (mine && S.cfg.turnLimit) {
     const sec = Math.max(0, Math.ceil(left / 1000));
     if (clock.dataset.s !== String(sec)) { clock.dataset.s = String(sec); clock.textContent = sec + '초'; }
@@ -673,7 +716,7 @@ function enter(msg) {
   localStorage.setItem('name', myName());
   connect(() => send(msg));
 }
-$('#bCreate').onclick = () => enter({ t: 'create', name: myName(), priv: $('#gPriv').checked });
+$('#bCreate').onclick = () => enter({ t: 'create', name: myName(), priv: $('#gPriv').checked, spec: $('#gSpec').checked });
 
 function doJoin() {
   const code = ($('#gCode').value || '').trim().toUpperCase();
@@ -703,24 +746,38 @@ document.addEventListener('visibilitychange', () => {
 });
 
 const ROOM_STATE = { wait: '기다리는 중', full: '가득 참', playing: '게임 중' };
+
+/** 방 한 줄의 문구와 눌러서 들어갈 수 있는지.
+ *  비공개 방은 코드가 목록에 없어 늘 못 누른다. 관전을 허용하는 방은 시작했거나 가득 차도 관전자로 들어간다. */
+function roomRow(r) {
+  if (r.priv) return { off: true, spec: false, label: ROOM_STATE[r.state] || '' };
+  if (r.state === 'wait') return { off: false, spec: false, label: ROOM_STATE.wait };
+  if (r.spec !== false) {
+    if (r.state === 'playing') return { off: false, spec: true, label: r.n < r.max ? '게임 중 · 다음 판부터 참여' : '게임 중 · 관전만' };
+    if (r.state === 'full') return { off: false, spec: true, label: '가득 참 · 관전' };
+  }
+  return { off: true, spec: false, label: ROOM_STATE[r.state] || '' };
+}
+
 function renderRooms(list) {
-  const open = list.filter(r => r.state === 'wait').length;
+  const open = list.filter(r => r.state === 'wait' && !r.priv).length;
   $('#roomCount').textContent = list.length ? `${open}곳` : '';
   $('#roomEmpty').hidden = list.length > 0;
   $('#roomList').innerHTML = list.map(r => {
-    const off = r.state !== 'wait';
-    return `<li><button class="room-row${off ? ' off' : ''}" data-code="${esc(r.code)}"${off ? ' disabled' : ''}>
-      <span class="rr-code">${esc(r.code)}</span>
-      <span class="rr-host">${esc(r.host || '이름 없음')}의 방</span>
+    const v = roomRow(r);
+    const watch = r.watching ? ` title="관전 ${r.watching}명"` : '';
+    return `<li><button class="room-row${v.off ? ' off' : ''}${r.priv ? ' priv' : ''}"${r.priv ? '' : ` data-code="${esc(r.code)}"`}${v.off ? ' disabled' : ''}${watch}>
+      ${r.priv ? '<span class="rr-code priv">비공개</span>' : `<span class="rr-code">${esc(r.code)}</span>`}
+      <span class="rr-host">${r.priv ? `${esc(r.host || '이름 없음')} 님` : `${esc(r.host || '이름 없음')}의 방`}</span>
       <span class="rr-n">${r.n}/${r.max}</span>
-      <span class="rr-st ${esc(r.state)}">${ROOM_STATE[r.state] || ''}</span>
+      <span class="rr-st ${v.spec ? 'spec' : esc(r.state)}">${v.label}</span>
     </button></li>`;
   }).join('');
 }
 // 줄을 누르면 코드를 넣고 참가를 누른 것과 똑같이 — 이름도 기존 참가 흐름을 그대로 탄다
 $('#roomList').addEventListener('click', e => {
   const b = e.target.closest('.room-row');
-  if (!b || b.disabled) return;
+  if (!b || b.disabled || !b.dataset.code) return;
   $('#gCode').value = b.dataset.code;
   doJoin();
 });
@@ -735,6 +792,7 @@ $('#bCopy').onclick = async () => {
 
 $('#tSum').onclick = () => send({ t: 'cfg', showSum: S.cfg.showSum !== true });
 $('#tPriv').onclick = () => send({ t: 'cfg', priv: S.cfg.priv !== true });
+$('#tSpec').onclick = () => send({ t: 'cfg', spec: S.cfg.spec === false });
 $$('#segTime button').forEach(b => {
   b.onclick = () => send({ t: 'cfg', turnLimit: Number(b.dataset.ms) });
 });
@@ -745,6 +803,7 @@ $('#bAgain').onclick = () => send({ t: 'again' });
 const leave = () => {
   const code = store.getItem('code'), token = store.getItem('token');
   store.removeItem('code'); store.removeItem('token');
+  specCtx = null; specId = null; specRejoin = false;     // 관전자는 다시 붙지 않는다
   resting = false; wokeUp = false;
   $('#toast').classList.remove('on');
   if (ws && ws.readyState === 1) send({ t: 'leave' });
@@ -757,7 +816,7 @@ const leave = () => {
   show('title');
 };
 $('#bLeave1').onclick = leave;
-$('#bLeave2').onclick = () => { if (confirm('정말 나갈까요?')) leave(); };
+$('#bLeave2').onclick = () => { if (isSpec() || confirm('정말 나갈까요?')) leave(); };
 $('#bLeave3').onclick = leave;
 
 /* 도움말 */

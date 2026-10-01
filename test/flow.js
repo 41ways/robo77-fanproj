@@ -45,6 +45,26 @@ function checkInvariants(s, log) {
   log.maxRound = Math.max(log.maxRound, s.round || 0);
 }
 
+/** 관전자가 받은 메시지에 숨은 정보가 없는지 — 카드 모양 객체는 top · ev.card 에만, 손패는 비어 있고, 남의 토큰은 없다 */
+function checkSpecView(msgs, tokens) {
+  const walk = (v, path) => {
+    if (Array.isArray(v)) return v.forEach((x, i) => walk(x, path + '[' + i + ']'));
+    if (!v || typeof v !== 'object') return;
+    assert.ok(!('tag' in v) || /(^|\.)(top|card)$/.test(path), `관전자에게 카드가 샘 (${path})`);
+    for (const k of Object.keys(v)) walk(v[k], path ? path + '.' + k : k);
+  };
+  for (const m of msgs) {
+    walk(m, '');
+    if (m.t === 'state') {
+      assert.strictEqual(m.role, 'spec');
+      assert.deepStrictEqual(m.hand, [], '관전자에게 손패가 감');
+      checkInvariants(m, { maxRound: 0 });      // 관전자가 보는 판도 같은 규칙을 지켜야 한다
+    }
+    const text = JSON.stringify(m);
+    for (const t of tokens) assert.ok(!text.includes(t), '관전자에게 남의 토큰이 샘');
+  }
+}
+
 function run(label, { players, turnLimit, showSum }) {
   return new Promise((resolve, reject) => {
     const log = { maxRound: 0, losses: 0, sawX2: false, sawRev: false, sawS76: false };
@@ -54,6 +74,21 @@ function run(label, { players, turnLimit, showSum }) {
     const bail = e => { if (!done) { done = true; try { ws.close(); } catch (_) {} reject(e); } };
     const finish = v => { if (!done) { done = true; try { ws.close(); } catch (_) {} resolve(v); } };
 
+    let sentKey = null;
+    let code = null, token = null, spec = null;     // 판이 시작되면 관전자 하나가 들어와 끝까지 지켜본다
+    const specMsgs = [];
+    const joinSpec = () => {
+      spec = new WebSocket(URL);
+      spec.on('open', () => spec.send(JSON.stringify({ t: 'join', code, name: '구경꾼' })));
+      spec.on('message', raw => {
+        const m = JSON.parse(raw);
+        specMsgs.push(m);
+        // 관전자가 아무 카드나 내려 해도 무시되어야 한다 — 판은 방장 쪽 검사가 그대로 지켜 준다
+        if (m.t === 'state' && m.phase === 'playing') spec.send(JSON.stringify({ t: 'play', id: 1 }));
+      });
+      spec.on('error', bail);
+    };
+
     const timeout = setTimeout(() => bail(new Error(`${label}: 60초 안에 안 끝남`)), 60_000);
 
     ws.on('open', () => ws.send(JSON.stringify({ t: 'create', name: '심판' })));
@@ -61,6 +96,7 @@ function run(label, { players, turnLimit, showSum }) {
     ws.on('message', raw => {
       let m; try { m = JSON.parse(raw); } catch (_) { return; }
 
+      if (m.t === 'welcome') { code = m.code; token = m.token; }
       if (m.t === 'err') return bail(new Error(`${label}: 서버 오류 — ${m.msg}`));
 
       if (m.t === 'ev') {
@@ -88,6 +124,7 @@ function run(label, { players, turnLimit, showSum }) {
       }
 
       if (m.phase === 'playing') {
+        if (!spec) joinSpec();
         // 합 공개를 끄면 서버가 합을 보내지 않아야 한다
         if (!showSum && !m.reveal) {
           if (m.sum !== null) return bail(new Error(`${label}: 합을 숨겨야 하는데 ${m.sum} 이 넘어옴`));
@@ -102,7 +139,10 @@ function run(label, { players, turnLimit, showSum }) {
               return bail(new Error(`${label}: ok 플래그가 규칙과 다름 (${c.tag} ${c.v}, 합 ${m.sum})`));
             }
           }
-          if (legal.length) {
+          // 관전자가 들어오면 같은 상태가 한 번 더 온다 — 같은 차례에 두 번 내지 않게
+          const key = m.round + ':' + m.hand.map(c => c.id).join(',');
+          if (legal.length && key !== sentKey) {
+            sentKey = key;
             const pickOne = legal[Math.floor(Math.random() * legal.length)];
             setTimeout(() => ws.send(JSON.stringify({ t: 'play', id: pickOne.id })), 10);
           }
@@ -115,7 +155,16 @@ function run(label, { players, turnLimit, showSum }) {
         const living = m.players.filter(p => !p.out);
         assert.ok(living.length <= 1, '승자가 둘 이상');
         if (living.length === 1) assert.strictEqual(m.winner, living[0].id, '승자 표시가 어긋남');
-        finish({ log, winner: living[0] ? living[0].name : null, rounds: m.round });
+        setTimeout(() => {
+          try {
+            assert.ok(specMsgs.some(x => x.t === 'welcome' && x.role === 'spec'), '관전자로 못 들어옴');
+            assert.ok(specMsgs.some(x => x.t === 'state' && x.phase === 'over'), '관전자가 끝까지 못 봄');
+            assert.ok(specMsgs.every(x => x.t !== 'err'), '관전자가 오류를 받음');
+            checkSpecView(specMsgs.filter(x => x.t === 'state' || x.t === 'ev'), [token]);
+            if (spec) spec.close();
+          } catch (e) { return bail(new Error(`${label}: ${e.message}`)); }
+          finish({ log, winner: living[0] ? living[0].name : null, rounds: m.round, watched: specMsgs.length });
+        }, 150);
       }
     });
 
@@ -144,7 +193,7 @@ function run(label, { players, turnLimit, showSum }) {
 
     for (const [label, cfg] of cases) {
       const r = await run(label, cfg);
-      console.log(`  ✓ ${label} — ${r.rounds}라운드, 승자 ${r.winner}, 실점 ${r.log.losses}회` +
+      console.log(`  ✓ ${label} — ${r.rounds}라운드, 승자 ${r.winner}, 실점 ${r.log.losses}회, 관전자 수신 ${r.watched}건` +
         ` (×2 ${r.log.sawX2 ? '○' : '×'} · 방향전환 ${r.log.sawRev ? '○' : '×'} · 76 ${r.log.sawS76 ? '○' : '×'})`);
     }
 

@@ -62,7 +62,11 @@
       <button id="bCreate" class="btn big">새 방 만들기</button>
       <label class="priv-pick">
         <input type="checkbox" id="gPriv">
-        <span>비공개 방으로 <small>열린 방 목록에 안 뜨고, 코드로만 들어와요</small></span>
+        <span>비공개 방으로 <small>목록엔 '비공개'로만 보이고, 코드로만 들어와요</small></span>
+      </label>
+      <label class="priv-pick">
+        <input type="checkbox" id="gSpec" checked>
+        <span>관전 허용 <small>시작했거나 가득 찬 방에도 구경하러 들어올 수 있어요</small></span>
       </label>
       <div class="or"><span>또는</span></div>
       <div class="join-row">
@@ -90,6 +94,7 @@
         <p class="muted small">방 코드</p>
         <p class="code" id="lCode">----</p>
         <p class="muted small" id="lCount">1 / 6명</p>
+        <p class="spec-note" id="lSpecNote" hidden>대기 중 — 자리가 나면 같이 해요</p>
       </div>
       <div class="head-actions">
         <button id="bCopy" class="btn ghost small">초대 링크 복사</button>
@@ -120,6 +125,14 @@
 
       <div class="opt">
         <div class="opt-text">
+          <p class="opt-title">관전 허용</p>
+          <p class="opt-desc">시작했거나 가득 찬 방에도 구경하러 들어올 수 있다. 자리가 나면 다음 판부터 같이 한다.</p>
+        </div>
+        <button id="tSpec" class="toggle" role="switch" aria-checked="true"><span></span></button>
+      </div>
+
+      <div class="opt">
+        <div class="opt-text">
           <p class="opt-title">제한 시간</p>
           <p class="opt-desc">시간이 지나면 하트를 하나 잃는다.</p>
         </div>
@@ -146,11 +159,14 @@
     <span class="pill" id="gRound">1라운드</span>
     <span class="pill" id="gDir">↻ 정방향</span>
     <span class="pill due" id="gDue" hidden></span>
+    <span class="pill" id="gSpecN" hidden></span>
     <span class="spacer"></span>
     <button class="btn ghost small" data-help>규칙</button>
     <button class="btn ghost small icon" data-theme-toggle aria-label="테마 바꾸기">☾</button>
     <button id="bLeave2" class="btn ghost small danger">나가기</button>
   </header>
+
+  <p class="spec-note" id="gSpecNote" hidden>관전 중 — 다음 판부터 자리가 나면 같이 해요</p>
 
   <div id="seats" class="seats"></div>
 
@@ -191,6 +207,7 @@
     <p class="crown">👑</p>
     <h2 id="oWinner">승자</h2>
     <p class="muted center" id="oSub"></p>
+    <p class="spec-note" id="oSpecNote" hidden>관전 중 — 방장이 다시 하면 자리가 나는 대로 같이 해요</p>
     <button id="bAgain" class="btn big">다시 하기</button>
     <button id="bLeave3" class="btn link">방 나가기</button>
   </div>
