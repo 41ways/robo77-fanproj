@@ -308,13 +308,13 @@ function chatBack() {
 document.addEventListener('visibilitychange', chatBack);
 window.addEventListener('focus', chatBack);
 
-/** 사람이 나 말고 또 있을 때만 채팅을 내놓는다 */
+/** 방에 들어가 있으면 채팅을 내놓는다 — 봇만 있는 방에서도 (전 게임 공통) */
 function syncChatVisible() {
   const humans = S ? S.players.filter(p => !p.bot).length + (S.specs ? S.specs.length : 0) : 0;
-  const on = humans > 1;
+  const on = !!S;
   $('#chatBtn').hidden = !on;
   if (!on) { $('#chat').hidden = true; chatPeekOff(); }
-  else $('#chatWho').textContent = `${humans}명`;
+  else $('#chatWho').textContent = humans > 1 ? `${humans}명` : '지금은 나 혼자 — 초대 링크로 불러 보세요';
 }
 
 $('#chatBtn').onclick = () => chatOpen($('#chat').hidden);
